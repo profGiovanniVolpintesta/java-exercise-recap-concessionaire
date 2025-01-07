@@ -3,13 +3,13 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package volpintesta.test;
+package volpintesta.concessionaire;
 
 /**
  *
  * @author User
  */
-public class HelloWorld
+public class MainClass
 {
     /**
      * @param args the command line arguments
