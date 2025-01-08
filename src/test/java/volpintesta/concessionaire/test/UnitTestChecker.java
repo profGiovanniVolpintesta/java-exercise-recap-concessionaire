@@ -51,7 +51,7 @@ public class UnitTestChecker {
                     try
                     {
                         Method mainMethod = mainClass.getMethod("main", String[].class);
-                        mainMethod.invoke(null, mainParameters);
+                        mainMethod.invoke(null, (Object) mainParameters);
                     }
                     catch (NoSuchMethodException | InvocationTargetException | IllegalAccessException e)
                     {
@@ -60,48 +60,59 @@ public class UnitTestChecker {
 
                     IOMode ioMode = IOMode.NONE;
                     int lineCount = 0;
+                    String line = null;
 
-                    while (testFileReader.ready())
+                    do
                     {
-                        String line = testFileReader.readLine();
                         int pieceCount = 0;
-                        while(line != null && !line.isEmpty())
+                        line = testFileReader.readLine();
+                        if (line != null)
                         {
-                            int inModeTokenIndex = line.indexOf(inModeToken);
-                            int outModeTokenIndex = line.indexOf(outModeToken);
-                            if (inModeTokenIndex >= 0 || outModeTokenIndex >= 0)
+                            while (!line.isEmpty())
                             {
-                                // if an ioToken is found, the previous part is to be handled according to the previous mode
-                                int firstTokenIndex = Math.min(Math.max(inModeTokenIndex, 0), Math.max(outModeTokenIndex, 0));
-                                String piece = line.substring(0, firstTokenIndex);
+                                int inModeTokenIndex = line.indexOf(inModeToken);
+                                int outModeTokenIndex = line.indexOf(outModeToken);
+                                int firstTokenIndex = -1;
+                                if (inModeTokenIndex >= 0 || outModeTokenIndex >= 0) // if a token is found, the string should be divided.
+                                {
+                                    // if an ioToken is found, the previous part is to be handled according to the previous mode
+                                    firstTokenIndex = Math.min(Math.max(inModeTokenIndex, 0), Math.max(outModeTokenIndex, 0));
+                                }
+
+                                String piece = (firstTokenIndex >= 0) ? line.substring(0, firstTokenIndex) : line;
+
                                 if (!piece.isEmpty())
                                 {
                                     if (ioMode == IOMode.IN)
                                     {
                                         stdInWriter.print(piece);
-                                    }
-                                    else if (ioMode == IOMode.OUT)
+                                    } else if (ioMode == IOMode.OUT)
                                     {
                                         char[] chars = new char[piece.length()];
                                         int readCharsCount = stdOutReader.read(chars);
-                                        String readString = new String (chars, 0, readCharsCount);
+                                        String readString = new String(chars, 0, readCharsCount);
+                                        readString = readString.replace("\r\n", "\n");
+                                        readString = readString.replace("\n", "\r\n");
 
-                                        assertTrue(!readString.contains("\n") && !readString.contains("\r")
-                                                , String.format("Error in substring %d of line %d of test \"%s\": expected \"%s\" - found a early line break."
-                                                        , pieceCount+1, lineCount+1, testFileName, piece));
+                                        String message = (pieceCount == 0 && firstTokenIndex < 0)
+                                                ? String.format("Error in part %d of line %d of test \"%s\": " , pieceCount + 1, lineCount + 1, testFileName)
+                                                : String.format("Error at line %d of test \"%s\": ", lineCount + 1, testFileName);
 
-                                        assertEquals(readString, piece
-                                                , String.format("Error in substring %d of line %d of test \"%s\": expected \"%s\" - found \"%s\" "
-                                                        , pieceCount+1, lineCount+1, testFileName, piece, readString));
+                                        assertEquals(piece, readString, message);
                                     }
                                 }
-                                // TODO: Cambiare mode
-                                // TODO: gestire il resto della stringa considerando l'"a capo" per l'ultimo pezzo, sia in input che in output.
+
+                                // update mode
+                                ioMode = (inModeTokenIndex >= 0 && inModeTokenIndex < outModeTokenIndex) ? IOMode.IN : IOMode.OUT;
+
+                                // remove the processed piece
+                                int firstTokenLength = ioMode == IOMode.IN ? inModeToken.length() : outModeToken.length();
+                                line = (firstTokenIndex >= 0) ? line.substring(firstTokenIndex + firstTokenLength) : "";
+                                pieceCount++;
                             }
-                            pieceCount++;
                         }
                         lineCount++;
-                    }
+                    } while(line != null);
                 }
                 catch (IOException e)
                 {
@@ -120,22 +131,10 @@ public class UnitTestChecker {
             System.setIn(originalIn);
             throw e;
         }
-
-
-
-        // action
-        MainClass2.main(null);
-
-        // assertion
-        // assertEquals("Hello world!\n", bos.toString());
-
-
-
-    }
-
-    public static void main (String[] args)
-    {
-        UnitTestChecker test = new UnitTestChecker();
-        test.makeTest();
+        finally
+        {
+            System.setOut(originalOut);
+            System.setIn(originalIn);
+        }
     }
 }
