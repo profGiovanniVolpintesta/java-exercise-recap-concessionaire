@@ -36,6 +36,8 @@ public class UnitTestChecker {
         PipedInputStream newStdIn = new PipedInputStream();
         System.setIn(newStdIn);
 
+        Thread mainThread = null;
+
         try
         {
             try
@@ -48,30 +50,41 @@ public class UnitTestChecker {
                          BufferedReader stdOutReader = new BufferedReader(new InputStreamReader(newStdOutInputStream));
                          PrintStream stdInWriter = new PrintStream(newStdInOutputStream)
                 ){
-                    try
+                    mainThread = new Thread ()
                     {
-                        Method mainMethod = mainClass.getMethod("main", String[].class);
-                        mainMethod.invoke(null, (Object) mainParameters);
-                    }
-                    catch (NoSuchMethodException | InvocationTargetException | IllegalAccessException e)
-                    {
-                        throw new RuntimeException(e);
-                    }
+                        @Override
+                        public void run()
+                        {
+                            try
+                            {
+                                Method mainMethod = mainClass.getMethod("main", String[].class);
+                                mainMethod.invoke(null, (Object) mainParameters);
+                            }
+                            catch (NoSuchMethodException | InvocationTargetException | IllegalAccessException e)
+                            {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                    };
+                    mainThread.start();
 
                     IOMode ioMode = IOMode.NONE;
                     int lineCount = 0;
-                    String line = null;
+                    String fileReaderLine = null;
+                    String stdOutReaderLine = "";
 
                     do
                     {
                         int pieceCount = 0;
-                        line = testFileReader.readLine();
-                        if (line != null)
+                        fileReaderLine = testFileReader.readLine();
+                        boolean stdOutReaderLineRead = false;
+                        if (fileReaderLine != null)
                         {
-                            while (!line.isEmpty())
+                            fileReaderLine += System.lineSeparator();
+                            while (!fileReaderLine.isEmpty())
                             {
-                                int inModeTokenIndex = line.indexOf(inModeToken);
-                                int outModeTokenIndex = line.indexOf(outModeToken);
+                                int inModeTokenIndex = fileReaderLine.indexOf(inModeToken);
+                                int outModeTokenIndex = fileReaderLine.indexOf(outModeToken);
                                 int firstTokenIndex = -1;
                                 if (inModeTokenIndex >= 0 || outModeTokenIndex >= 0) // if a token is found, the string should be divided.
                                 {
@@ -79,20 +92,41 @@ public class UnitTestChecker {
                                     firstTokenIndex = Math.min(Math.max(inModeTokenIndex, 0), Math.max(outModeTokenIndex, 0));
                                 }
 
-                                String piece = (firstTokenIndex >= 0) ? line.substring(0, firstTokenIndex) : line;
+                                String piece = null;
+                                if (firstTokenIndex >= 0 && firstTokenIndex <= fileReaderLine.length())
+                                    piece = fileReaderLine.substring(0, firstTokenIndex);
+                                else
+                                    piece = fileReaderLine;
 
                                 if (!piece.isEmpty())
                                 {
                                     if (ioMode == IOMode.IN)
                                     {
                                         stdInWriter.print(piece);
-                                    } else if (ioMode == IOMode.OUT)
+                                    }
+                                    else if (ioMode == IOMode.OUT)
                                     {
-                                        char[] chars = new char[piece.length()];
-                                        int readCharsCount = stdOutReader.read(chars);
-                                        String readString = new String(chars, 0, readCharsCount);
-                                        readString = readString.replace("\r\n", "\n");
-                                        readString = readString.replace("\n", "\r\n");
+                                        if (!stdOutReaderLineRead)
+                                        {
+                                            String newStdOutReaderLine = stdOutReader.readLine();
+                                            if (newStdOutReaderLine != null)
+                                            {
+                                                stdOutReaderLine += newStdOutReaderLine + System.lineSeparator();
+                                            }
+                                            stdOutReaderLineRead = true;
+                                        }
+
+                                        String readString = null;
+                                        if (stdOutReaderLine.length() >= piece.length())
+                                        {
+                                            readString = stdOutReaderLine.substring(0, piece.length());
+                                            stdOutReaderLine = stdOutReaderLine.substring(piece.length());
+                                        }
+                                        else
+                                        {
+                                            readString = stdOutReaderLine;
+                                            stdOutReaderLine = "";
+                                        }
 
                                         String message = (pieceCount == 0 && firstTokenIndex < 0)
                                                 ? String.format("Error in part %d of line %d of test \"%s\": " , pieceCount + 1, lineCount + 1, testFileName)
@@ -103,16 +137,34 @@ public class UnitTestChecker {
                                 }
 
                                 // update mode
-                                ioMode = (inModeTokenIndex >= 0 && inModeTokenIndex < outModeTokenIndex) ? IOMode.IN : IOMode.OUT;
+                                ioMode = (inModeTokenIndex >= 0 && outModeTokenIndex < 0) ? IOMode.IN
+                                        : (inModeTokenIndex < 0 && outModeTokenIndex >= 0) ? IOMode.OUT
+                                        : (inModeTokenIndex >= 0 && inModeTokenIndex < outModeTokenIndex) ? IOMode.IN
+                                        : (outModeTokenIndex >= 0 && outModeTokenIndex < inModeTokenIndex) ? IOMode.OUT
+                                        : ioMode;
 
                                 // remove the processed piece
                                 int firstTokenLength = ioMode == IOMode.IN ? inModeToken.length() : outModeToken.length();
-                                line = (firstTokenIndex >= 0) ? line.substring(firstTokenIndex + firstTokenLength) : "";
+
+                                if (firstTokenIndex >= 0 && firstTokenIndex + firstTokenLength < fileReaderLine.length())
+                                    fileReaderLine = fileReaderLine.substring(firstTokenIndex + firstTokenLength);
+                                else
+                                    fileReaderLine = "";
+
                                 pieceCount++;
                             }
                         }
                         lineCount++;
-                    } while(line != null);
+                    } while(fileReaderLine != null);
+
+                    try
+                    {
+                        mainThread.join();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        throw new RuntimeException(e);
+                    }
                 }
                 catch (IOException e)
                 {
