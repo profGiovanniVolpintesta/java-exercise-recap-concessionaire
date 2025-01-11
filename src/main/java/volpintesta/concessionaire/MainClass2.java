@@ -10,5 +10,7 @@ public class MainClass2 {
         String s1 = input.next();
         String s2 = input.next();
         System.out.println(Integer.parseInt(s1) + Integer.parseInt(s2));
+        System.out.println(Integer.parseInt(s1) + Integer.parseInt(s2));
+        System.out.println(Integer.parseInt(s1) + Integer.parseInt(s2));
     }
 }
