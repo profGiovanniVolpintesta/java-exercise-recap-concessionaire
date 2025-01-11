@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import volpintesta.concessionaire.*;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -18,23 +17,44 @@ public class UnitTestChecker {
         NONE, IN, OUT
     }
 
+    private class SyncField<E>
+    {
+        private Object mutex;
+        private E value;
+        public E getValue() { synchronized(mutex) { return this.value; } }
+        public void setValue(E value) { synchronized(mutex) { this.value = value; } }
+        public SyncField(Object synchronizationMutex, E initializationValue)
+        {
+            value = initializationValue;
+            mutex = synchronizationMutex;
+        }
+    }
+
     private static final String inModeToken = "[IN]";
     private static final String outModeToken = "[OUT]";
 
     private static final String mainClassName = "volpintesta.concessionaire.MainClass2";
     private static final String[] mainParameters = new String[]{};
-    private static final long mainTimeToInterruptMillisecs = 3000; // Wait time to let the output to be checked after the main is finished.
+    private static final long mainFunctionExecutionTimeout = 3000; // Wait time to let the output to be checked after the main is finished.
+    private static final int maxInterruptionAttempts = 100;
     private static final String testFileName = "unit-tests\\UnitTest1.utest";
 
-    Method mainMethod = null;
-    private Thread mainThread = null;
-    private Throwable __uncaughtMainThreadException = null;
-    private synchronized void setUncaughtMainThreadException(Throwable e) { __uncaughtMainThreadException = e; }
-    public synchronized Throwable getUncaughtMainThreadException() { return __uncaughtMainThreadException; }
-
-    private Thread mainTimerThread = null;
-
+    private Thread mainFunctionThread = null;
+    private Thread timeoutControllerThread = null;
     private Thread checkerThread = null;
+
+    Method mainMethod = null;
+
+    private SyncField<Boolean> mainFunctionTimeoutReached = new SyncField<Boolean> (this, false);
+    private SyncField<Boolean> timeoutThreadAbortRequested = new SyncField<Boolean> (this, false);
+    private SyncField<Boolean> mainFunctionAbortRequested = new SyncField<Boolean> (this, false);
+    private SyncField<Boolean> mainExecutionEnded = new SyncField<Boolean> (this, false);
+
+    private SyncField<Throwable> mainFunctionInvokingException = new SyncField<Throwable> (this, null);
+    private SyncField<Throwable> mainFunctionCodeException = new SyncField<Throwable> (this, null);
+    private SyncField<Throwable> mainFunctionThreadUnexpectedError = new SyncField<Throwable> (this, null);
+    private SyncField<Throwable> timeoutControllerThreadUnexpectedError = new SyncField<Throwable> (this, null);
+    private SyncField<Throwable> checkerThreadUnexpectedError = new SyncField<Throwable> (this, null);
 
     private void executeMainClass()
     {
@@ -42,52 +62,130 @@ public class UnitTestChecker {
         {
             mainMethod.invoke(null, (Object) mainParameters);
         }
-        catch (InvocationTargetException | IllegalAccessException e)
+        catch (Exception e)
         {
             throw new RuntimeException(e);
         }
+        finally
+        {
+            mainExecutionEnded.setValue(true);
+        }
     }
 
-    private void executeMainTimerThread()
+    private void executeTimeoutControllerThread()
     {
-        if (mainThread != null && mainThread.isAlive())
+        int mainFunctionInterruptionAttempts = 0;
+
+        boolean mainTimeoutReached = false;
+        mainFunctionTimeoutReached.setValue(false);
+
+        long mainFunctionExecutionTime = 0;
+        while (mainFunctionThread != null && mainFunctionThread.isAlive()
+                && !mainFunctionAbortRequested.getValue()
+                && mainFunctionExecutionTime < mainFunctionExecutionTimeout)
         {
             try {
-                Thread.sleep(!mainThread.isInterrupted() ? mainTimeToInterruptMillisecs : 10);
-            } catch (InterruptedException e) { /* do nothing*/ }
-
-            while (mainThread.isAlive()) {
-                if (!mainThread.isInterrupted()) {
-                    mainThread.interrupt(); // interrupt wait operations to let the main thread to continue.
-                }
-
-                try {
-                    Thread.sleep(10); // wait for the main thread to become not alive
-                } catch (InterruptedException e) { /* do nothing*/ }
+                Thread.sleep(50);
+                mainFunctionExecutionTime += 50;
+            } catch (InterruptedException e) {
+                // Someone interrupted the sleep of this thread. Stop waiting for the main timeout.
+                break;
             }
         }
-
-        if (checkerThread != null && checkerThread.isAlive() && !checkerThread.isInterrupted())
+        if (mainFunctionExecutionTime >= mainFunctionExecutionTimeout)
         {
-            Throwable mainThreadException = getUncaughtMainThreadException();
-            if ((mainThread != null && mainThread.isInterrupted()) || mainThreadException != null)
-            {
-                // If some problems occurred with the main thread, interrupt any eventual wait operations in the checker thread
-                // to let it launch the correct controls.
-                checkerThread.interrupt();
-            }
-            else
-            {
-                // Otherwise, the main has ended without error, but the checker thread is still pending, maybe
-                // in an I/O operation waiting for an input that will never come. It has to be interrupted, but after
-                // some time to ensure it's not running some heavy computations.
-                try {
-                    Thread.sleep(mainTimeToInterruptMillisecs);
-                } catch (InterruptedException e) { /* do nothing*/ }
+            mainTimeoutReached = true;
+            mainFunctionTimeoutReached.setValue(true); // put the information in a synchronized container
+        }
 
-                checkerThread.interrupt();
+        // IMPORTANT: from here on, this thread must complete its execution even if it's interrupted
+        // because the following is important thread synchronization logic.
+        // Note that even if the sleep call is interrupted by another thread, the interruption flag of the thread
+        // is cleared after the InterruptedException handling, so the interruption attempt should be registered stored
+        // in another variable, if it is needed.
+
+        // If the main function timeout has been reached and the main function thread hasn't ended yet,
+        // here it will be forcefully and repeatedly interrupted.
+        if (mainTimeoutReached || mainFunctionAbortRequested.getValue())
+        {
+            while (mainFunctionThread != null && mainFunctionThread.isAlive()
+                    && mainFunctionInterruptionAttempts < maxInterruptionAttempts)
+            {
+                mainFunctionThread.interrupt();
+                mainFunctionInterruptionAttempts++;
+
+                // Wait 1 millisecond to let the main function thread end gracefully
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException e) { /* do nothing */ }
             }
         }
+
+        // Wait some time to let the main function thread end gracefully
+        // and to be sure any eventually raised exception has enough time to be caught and processed
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) { /* do nothing */ }
+
+        // If the main function timeout has been reached, whether the main function was successfully interrupted or not,
+        // and if this thread's sleep didn't be interrupted by the checker thread after it consumed the output,
+        // it means the checker thread could still be waiting for some expected output to be received from the
+        // main function, so it should be interrupted because it will never be received.
+        // Note that if the main function ended on its own, the checker thread would have interrupted this thread
+        // after processing the output, so the timeout wouldn't have been reached.
+        // Finally, the checker thread should not be interrupted if it has asked this thread to stop,
+        // otherwise its subsequent join() call used to wait this thread to end gracefully would be early interrupted.
+        if ((mainExecutionEnded.getValue() || mainTimeoutReached || mainFunctionAbortRequested.getValue())
+                && !timeoutThreadAbortRequested.getValue())
+        {
+            while (checkerThread != null && checkerThread.isAlive()
+                    && !timeoutThreadAbortRequested.getValue())
+            {
+                checkerThread.interrupt();
+
+                // Wait 1 millisecond to let the main function thread end gracefully
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) { /* do nothing */ }
+            }
+        }
+    }
+
+    private void handleMainThreadException (Throwable e)
+    {
+        if (e != null)
+        {
+            if (e instanceof IllegalArgumentException // instance method called on an object of the wrong type; errors in wrapping/unwrapping primitive arguments; not corresponding actual and formal parameters
+                    || e instanceof NullPointerException // the specified object is null and the method is an instance method
+                    || e instanceof ExceptionInInitializerError // the initialization provoked by the method failed
+            ){
+                mainFunctionInvokingException.setValue(e);
+            }
+            else if (e instanceof RuntimeException && e.getCause() != null) // Check if method.invoke threw an exception that was wrapped inside a RuntimeException.
+            {
+                if (e.getCause() instanceof IllegalAccessException) // Method object is enforcing Java language access control and the underlying method is inaccessible.
+                    mainFunctionInvokingException.setValue(e.getCause());
+                else if (e.getCause() instanceof InvocationTargetException && e.getCause().getCause() != null)  // The underlying method throws an exception
+                {
+                    if (!mainFunctionAbortRequested.getValue() && !mainFunctionTimeoutReached.getValue()) // ignore exceptions called after a forced interruption
+                        mainFunctionCodeException.setValue(e.getCause().getCause());
+                }
+                else
+                    mainFunctionThreadUnexpectedError.setValue(e.getCause());
+            } else {
+                mainFunctionThreadUnexpectedError.setValue(e);
+            }
+        }
+    }
+
+    private void handleTimeoutControllerThreadException (Throwable e)
+    {
+        if (e != null) timeoutControllerThreadUnexpectedError.setValue(e);
+    }
+
+    private void handleCheckerThreadException (Throwable e)
+    {
+        if (e != null) checkerThreadUnexpectedError.setValue(e);
     }
 
     @Test
@@ -119,21 +217,22 @@ public class UnitTestChecker {
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override
             public void uncaughtException(Thread t, Throwable e) {
-                if (t == mainThread)
-                    setUncaughtMainThreadException(e);
+                if (t == mainFunctionThread) handleMainThreadException(e);
+                else if (t == timeoutControllerThread) handleTimeoutControllerThreadException(e);
+                else if (t == checkerThread) handleCheckerThreadException(e);
             }
         });
 
-        mainThread = new Thread() {
+        mainFunctionThread = new Thread() {
             @Override public void run() {
                 executeMainClass();
                 System.out.flush(); // make sure output have been flushed to be correctly checked
             }
         };
 
-        mainTimerThread = new Thread() {
+        timeoutControllerThread = new Thread() {
             @Override public void run() {
-                executeMainTimerThread();
+                executeTimeoutControllerThread();
             }
         };
 
@@ -152,91 +251,87 @@ public class UnitTestChecker {
                 // Store the whole output in a dedicated stream where it can later be read from to check the main output.
                 readIoScriptFile(testFileName, newStdInOutputStream, expectedOutOutputStream);
                 newStdInOutputStream.flush(); // Do not close the streams to prevent the raising of different exceptions than during the normal execution.
-                newStdInOutputStream.close();
                 expectedOutOutputStream.flush();
                 expectedOutOutputStream.close();
 
                 // launch the main in another thread
-                mainThread.start();
-                mainTimerThread.start();
+                mainFunctionThread.start();
+                timeoutControllerThread.start();
                 // TODO: Gestire la terminazione anomala del main, e inserire un timeout per quando il main non risponde
 
                 // start receiving the main output and check it against the expected output
-                boolean interruptedIO = false;
-                boolean earlyEndedIO = false;
-                String expected;
-                String actual = null;
-                while ((expected = expectedOutReader.readLine()) != null)
+                boolean outputCheckFailed = false;
+                boolean testNotEnded = false;
+                String expectedOutput;
+                String failureExpectedOutput = null;
+                String failureActualOutput = null;
+                while ((expectedOutput = expectedOutReader.readLine()) != null)
                 {
                     try {
-                        actual = newStdOutReader.readLine();
-                    } catch (InterruptedIOException e) {
-                        // The timer thread has stopped the current thread.
-                        interruptedIO = true;
-                        break; // exit from this check and serve this case later differentiating the error.
-                    } catch (IOException e) {
-                        // The timer thread has stopped the current thread.
-                        earlyEndedIO = true;
-                        break; // exit from this check and serve this case later differentiating the error.
-                    }
-                    assertEquals(expected, actual);
-                    actual = null;
-                }
+                        String actualOutput = newStdOutReader.readLine();
+                        if (actualOutput == null)
+                        {
+                            mainFunctionAbortRequested.setValue(true);
+                            testNotEnded = true;
+                            break;
+                        }
 
-                boolean tooLongMainFunction = false;
-                try {
-                    actual = newStdOutReader.readLine();
-                    if (actual != null)
-                    {
-                        tooLongMainFunction = true;
+                        boolean testOk = expectedOutput.equals(actualOutput);
+
+                        if (!testOk)
+                        {
+                            // notify the failure. In this case the data is not cleared to use it later in the assertion message
+                            outputCheckFailed = true;
+                            failureExpectedOutput = expectedOutput;
+                            failureActualOutput = actualOutput;
+                            mainFunctionAbortRequested.setValue(true);
+                            break;
+                        }
+                    } catch (Exception e) {
+                        // An IOException can be raised if the stream is closed
+                        // An InterruptedIOException is called if the timeout thread interrupted a read call
+                        // In any case, the check is finished,
+                        testNotEnded = true;
+                        break;
                     }
-                } catch (InterruptedIOException e) {
-                    // The timer thread has stopped the current thread.
-                    interruptedIO = true;
-                } catch (IOException e) {
-                    // The timer thread has stopped the current thread.
-                    earlyEndedIO = true;
                 }
 
                 // wait for the main method to end
                 try {
-                    mainThread.join();
+                    mainFunctionThread.join();
                 } catch (InterruptedException e) { /* do nothing */ }
 
-                Throwable mainThreadException = getUncaughtMainThreadException();
-                if (mainThreadException != null) {
-                    if (mainThreadException instanceof IllegalArgumentException) {
-                        Assertions.fail("The main in class \"" + mainClassName + "\" has been declared with the wrong arguments.");
-                    } else if (mainThreadException instanceof NullPointerException) {
-                        Assertions.fail("The main in class \"" + mainClassName + "\" is not static.");
-                    } else if (mainThreadException instanceof RuntimeException) {
-                        RuntimeException runtimeException = (RuntimeException) mainThreadException;
-                        Throwable innerException1 = runtimeException.getCause();
-                        if (innerException1 instanceof IllegalAccessException) {
-                            Assertions.fail("The main in class \"" + mainClassName + "\" is not accessible.");
-                        } else if (innerException1 instanceof InvocationTargetException) {
-                            Assertions.fail("Uncaught exception during main execution.", innerException1.getCause());
-                        }
-                    }
-                }
-                else if (mainThread != null && mainThread.isInterrupted())
+                timeoutThreadAbortRequested.setValue(true);
+                try {
+                    timeoutControllerThread.join();
+                } catch (InterruptedException e) { /* do nothing */ }
+
+                Throwable raisedException = null;
+                if ((raisedException = mainFunctionInvokingException.getValue()) != null)
                 {
-                    // If the main thread was interrupted without an exception, it means it remained blocked in an
-                    // operation that did not raise any error. Probably it was blocked in some input because the script
-                    // ended too soon.
-                    Assertions.fail("The main function has been interrupted because it was unresponsive.");
+                    Assertions.fail("A main function was found in class \""+mainClassName+"\", but it could not be called because it was not declared appropriately. " +
+                            "See documentation of invoke(Object target, Object params) method inside java.lang.reflect.Method class for further information about the raised exception.", raisedException);
                 }
-                else if (interruptedIO || earlyEndedIO)
+                else if ((raisedException = mainFunctionCodeException.getValue()) != null)
                 {
-                    // If there is no exception, and the main thread has not been interrupted, but this thread is,
-                    // the main finished while this thread was still waiting for some output.
-                    // Let's check if there is some more expected output to receive, in which case there was an error.
-                    if (expected != null && (actual == null || !expected.equals(actual) || expectedOutReader.readLine() != null))
-                        Assertions.fail("The main function ended without completing the script execution.");
+                    Assertions.fail("Uncaught exception during the execution of the main function code.", raisedException);
                 }
-                else if (tooLongMainFunction)
+                else if ((raisedException = mainFunctionThreadUnexpectedError.getValue()) != null)
                 {
-                    Assertions.fail("The main function continued its execution after the I/O script ended its execution.");
+                    Assertions.fail("An unexpected error happened during the execution of the executor program. " +
+                            "You are welcome to reproduce a dump of this error and to send it to the code's author to help improving this project quality.", raisedException);
+                }
+                else if (mainFunctionTimeoutReached.getValue())
+                {
+                    Assertions.fail("The main function execution timeout has been reached and the function has been interrupted.");
+                }
+                else if (testNotEnded)
+                {
+                    Assertions.fail("The main function execution ended before the test was completed.");
+                }
+                else if (outputCheckFailed)
+                {
+                    Assertions.assertEquals(failureExpectedOutput, failureActualOutput, "Expected output defined in the test script differs from the actual one obtained executing the main function.");
                 }
             }
             catch (IOException e)
