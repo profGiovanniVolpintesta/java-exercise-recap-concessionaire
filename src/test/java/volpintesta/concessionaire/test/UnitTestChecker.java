@@ -53,8 +53,6 @@ public class UnitTestChecker {
     private SyncField<Throwable> mainFunctionInvokingException = new SyncField<Throwable> (this, null);
     private SyncField<Throwable> mainFunctionCodeException = new SyncField<Throwable> (this, null);
     private SyncField<Throwable> mainFunctionThreadUnexpectedError = new SyncField<Throwable> (this, null);
-    private SyncField<Throwable> timeoutControllerThreadUnexpectedError = new SyncField<Throwable> (this, null);
-    private SyncField<Throwable> checkerThreadUnexpectedError = new SyncField<Throwable> (this, null);
 
     private void executeMainClass()
     {
@@ -178,16 +176,6 @@ public class UnitTestChecker {
         }
     }
 
-    private void handleTimeoutControllerThreadException (Throwable e)
-    {
-        if (e != null) timeoutControllerThreadUnexpectedError.setValue(e);
-    }
-
-    private void handleCheckerThreadException (Throwable e)
-    {
-        if (e != null) checkerThreadUnexpectedError.setValue(e);
-    }
-
     @Test
     public void makeTest()
     {
@@ -218,8 +206,6 @@ public class UnitTestChecker {
             @Override
             public void uncaughtException(Thread t, Throwable e) {
                 if (t == mainFunctionThread) handleMainThreadException(e);
-                else if (t == timeoutControllerThread) handleTimeoutControllerThreadException(e);
-                else if (t == checkerThread) handleCheckerThreadException(e);
             }
         });
 
