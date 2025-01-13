@@ -1,16 +1,16 @@
-package volpintesta.concessionaire.test;
+package volpintesta.test;
 
 import java.io.*;
 
-public class UnitTestScriptParser
+public class TestScriptParser
 {
     private enum IOMode
     {
         NONE, IN, OUT
     }
 
-    private static final String inModeToken = "[IN]";
-    private static final String outModeToken = "[OUT]";
+    public static final String inModeToken = "[IN]";
+    public static final String outModeToken = "[OUT]";
 
     /**
      * Reads an IO script file looking for [IN] and [OUT] tokens which change the I/O mode between INPUT and OUTPUT.

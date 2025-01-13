@@ -1,4 +1,4 @@
-package volpintesta.concessionaire.test;
+package volpintesta.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,7 +10,7 @@ import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
-public class UnitTestChecker
+public class TestScriptExecutor
 {
     private static final String mainClassName = "volpintesta.concessionaire.MainClass2";
     private static final String[] mainParameters = new String[]{};
@@ -205,7 +205,7 @@ public class UnitTestChecker
                 // Read the script file dividing input and output.
                 // Enqueue the whole input to the new input stream so the main can read it with its own timing.
                 // Store the whole output in a dedicated stream where it can later be read from to check the main output.
-                UnitTestScriptParser.readIoScriptFile(testFileName, newStdInOutputStream, expectedOutOutputStream);
+                TestScriptParser.readIoScriptFile(testFileName, newStdInOutputStream, expectedOutOutputStream);
                 newStdInOutputStream.flush(); // Do not close the streams to prevent the raising of different exceptions than during the normal execution.
                 expectedOutOutputStream.flush();
                 expectedOutOutputStream.close();

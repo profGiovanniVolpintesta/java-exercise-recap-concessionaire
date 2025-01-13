@@ -1,4 +1,4 @@
-package volpintesta.concessionaire.test;
+package volpintesta.test;
 
 public class SyncField<E>
 {
