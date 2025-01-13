@@ -1,22 +1,47 @@
 package volpintesta.test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
-
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 public class TestScriptExecutor
 {
-    private static final String mainClassName = "volpintesta.concessionaire.MainClass2";
-    private static final String[] mainParameters = new String[]{};
-    private static final long mainFunctionExecutionTimeout = 3000; // Wait time to let the output to be checked after the main is finished.
-    private static final int maxInterruptionAttempts = 100;
-    private static final String testFileName = "unit-tests\\UnitTest1.utest";
+    public enum ExecState
+    {
+        CREATED
+        , STARTED
+        , SUCCESS
+        , FAILURE
+    }
+
+    private final String mainClassName;
+    private String[] mainFunctionArgs;
+    private long mainFunctionExecutionTimeout; // Wait time to let the output to be checked after the main is finished.
+    private int maxInterruptionAttempts;
+    private final String testScriptFilePath;
+
+    private SyncField<ExecState> executionState;
+    public boolean hasStarted() { return executionState.getValue() != ExecState.CREATED; }
+    public boolean isEnded() {
+        ExecState tmp = executionState.getValue();
+        return tmp == ExecState.SUCCESS || tmp == ExecState.FAILURE;
+    }
+    public boolean hasSucceeded() { return executionState.getValue() == ExecState.SUCCESS; }
+    public boolean hasFailed() { return executionState.getValue() == ExecState.FAILURE; }
+
+    private SyncField<String> failureMessage = new SyncField<String>(this, null);
+    private SyncField<Throwable> failureError = new SyncField<Throwable>(this, null);
+    public String getFailureMessage() { return failureMessage.getValue(); }
+    public Throwable getFailureError() { return failureError.getValue(); }
+
+    private void setFailure (String failureMessage, Throwable failureError)
+    {
+        executionState.setValue(ExecState.FAILURE);
+        this.failureMessage.setValue(failureMessage);
+        this.failureError.setValue(failureError);
+    }
+    private void setFailure (String failureMessage) { setFailure(failureMessage, null); }
+    private void setSuccess() { executionState.setValue(ExecState.SUCCESS); }
 
     private Thread mainFunctionThread = null;
     private Thread timeoutControllerThread = null;
@@ -33,9 +58,27 @@ public class TestScriptExecutor
     private SyncField<Throwable> mainFunctionCodeException = new SyncField<Throwable> (this, null);
     private SyncField<Throwable> mainFunctionThreadUnexpectedError = new SyncField<Throwable> (this, null);
 
+    public TestScriptExecutor (String mainClassName, String[] mainArgs, String testScriptFilePath, long mainFunctionExecutionTimeout, int maxInterruptionAttempts)
+    {
+        this.mainClassName = mainClassName;
+        this.mainFunctionArgs = mainArgs;
+        this.testScriptFilePath = testScriptFilePath;
+        this.mainFunctionExecutionTimeout = mainFunctionExecutionTimeout;
+        this.maxInterruptionAttempts = maxInterruptionAttempts;
+        this.executionState = new SyncField<ExecState>(this, ExecState.CREATED);
+    }
+    public TestScriptExecutor (String mainClassName, String[] mainArgs, String testScriptFilePath)
+    {
+        this(mainClassName, mainArgs, testScriptFilePath, 3000, 100);
+    }
+    public TestScriptExecutor (String mainClassName, String testScriptFilePath)
+    {
+        this(mainClassName, new String[0], testScriptFilePath);
+    }
+
     private void executeMainClass()
     {
-        try { mainMethod.invoke(null, (Object) mainParameters); }
+        try { mainMethod.invoke(null, (Object) mainFunctionArgs); }
         catch (Exception e) { throw new RuntimeException(e); }
         finally { mainExecutionEnded.setValue(true); }
     }
@@ -146,9 +189,19 @@ public class TestScriptExecutor
         }
     }
 
-    @Test
-    public void makeTest()
+    /**
+     * Starts the test. Note that after a TestScriptExecutor object has been used to start a test, it can never be used again.
+     * The returned value indicates whether the test started or not, it does not indicate the test result. There are specific
+     * methods to retrieve the test completion state and its result.
+     * @return true if the test started, false otherwise.
+     */
+    public boolean makeTest()
     {
+        if (hasStarted())
+            return false;
+
+        executionState.setValue(ExecState.STARTED);
+
         checkerThread = Thread.currentThread();
 
         PrintStream originalOut = System.out;
@@ -160,16 +213,18 @@ public class TestScriptExecutor
 
         try
         {
-            Class<?> mainClass = Class.forName(mainClassName);
-            mainMethod = mainClass.getMethod("main", String[].class);
+            Class<?> mainClass = Class.forName(mainClassName); // ClassNotFoundException: MainClass not found
+            mainMethod = mainClass.getMethod("main", String[].class); // NoSuchMethodException: main function not found
         }
         catch (ClassNotFoundException e)
         {
-            Assertions.fail("MainClass \""+mainClassName+"\" not found.");
+            setFailure("MainClass \""+mainClassName+"\" not found.");
+            return true;
         }
         catch (NoSuchMethodException e)
         {
-            Assertions.fail("No main method found inside the MainClass \""+mainClassName+"\".");
+            setFailure("No main method found inside the MainClass \""+mainClassName+"\".");
+            return true;
         }
 
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
@@ -205,7 +260,7 @@ public class TestScriptExecutor
                 // Read the script file dividing input and output.
                 // Enqueue the whole input to the new input stream so the main can read it with its own timing.
                 // Store the whole output in a dedicated stream where it can later be read from to check the main output.
-                TestScriptParser.readIoScriptFile(testFileName, newStdInOutputStream, expectedOutOutputStream);
+                TestScriptParser.readIoScriptFile(testScriptFilePath, newStdInOutputStream, expectedOutOutputStream);
                 newStdInOutputStream.flush(); // Do not close the streams to prevent the raising of different exceptions than during the normal execution.
                 expectedOutOutputStream.flush();
                 expectedOutOutputStream.close();
@@ -264,35 +319,41 @@ public class TestScriptExecutor
                 Throwable raisedException = null;
                 if ((raisedException = mainFunctionInvokingException.getValue()) != null)
                 {
-                    Assertions.fail("A main function was found in class \""+mainClassName+"\", but it could not be called because it was not declared appropriately. " +
+                    setFailure("A main function was found in class \""+mainClassName+"\", but it could not be called because it was not declared appropriately. " +
                             "See documentation of invoke(Object target, Object params) method inside java.lang.reflect.Method class for further information about the raised exception.", raisedException);
                 }
                 else if ((raisedException = mainFunctionCodeException.getValue()) != null)
                 {
-                    Assertions.fail("Uncaught exception during the execution of the main function code.", raisedException);
+                    setFailure("Uncaught exception during the execution of the main function code.", raisedException);
                 }
                 else if ((raisedException = mainFunctionThreadUnexpectedError.getValue()) != null)
                 {
-                    Assertions.fail("An unexpected error happened during the execution of the executor program. " +
+                    setFailure("An unexpected error happened during the execution of the executor program. " +
                             "You are welcome to reproduce a dump of this error and to send it to the code's author to help improving this project quality.", raisedException);
                 }
                 else if (mainFunctionTimeoutReached.getValue())
                 {
-                    Assertions.fail("The main function execution timeout has been reached and the function has been interrupted.");
+                    setFailure("The main function execution timeout has been reached and the function has been interrupted.");
                 }
                 else if (testNotEnded)
                 {
-                    Assertions.fail("The main function execution ended before the test was completed.");
+                    setFailure("The main function execution ended before the test was completed.");
                 }
                 else if (outputCheckFailed)
                 {
-                    Assertions.assertEquals(failureExpectedOutput, failureActualOutput, "Expected output defined in the test script differs from the actual one obtained executing the main function.");
+                    setFailure("Expected output defined in the test script differs from the actual one obtained executing the main function." +
+                                    "\n\n[EXPECTED OUTPUT:]\n"+failureExpectedOutput+"\n\n[ACTUAL OUTPUT:]\n"+failureActualOutput+"\n");
+                }
+                else
+                {
+                    setSuccess();
                 }
             }
             catch (IOException e)
             {
                 throw new RuntimeException(e);
             }
+            return true;
         }
         finally
         {
