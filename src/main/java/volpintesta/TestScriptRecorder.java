@@ -20,7 +20,6 @@ public class TestScriptRecorder
         public int getValue() { return this.value; }
     }
 
-    private static String filePath = "unit-tests\\CreatedUnitTest1.utest";
     private static PrintWriter fileWriter = null;
 
     public static void main (String[] args)
@@ -28,7 +27,11 @@ public class TestScriptRecorder
         if (args.length < 2)
         {
             System.err.println("Missing arguments. Required arguments: <package.MainClass> <testFilePath>");
+            System.exit(ErrorCode.MISSING_ARGUMENTS.getValue());
         }
+        
+        String mainClassName = args[0];
+        String filePath = args[1];
 
         File testFile = new File (filePath);
         if (testFile.exists())
@@ -99,7 +102,10 @@ public class TestScriptRecorder
 
             try {
                 if (fileWriter != null && s != null)
+                {
                     fileWriter.println(s);
+                    s = null;
+                }
             } catch (Exception e) {
                 System.err.println("Error writing test file");
                 System.exit(ErrorCode.WRITE_FILE_ERROR.getValue());
