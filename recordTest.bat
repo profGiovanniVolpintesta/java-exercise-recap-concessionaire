@@ -10,7 +10,7 @@ SET CLASSPATH=".\build\classes\java\main"
 SET CLASSPATH=".\build\classes"
 )
 
-SET MAINCLASS=volpintesta.TestScriptRecorder
+SET MAINCLASS=volpintesta.test.TestScriptRecorder
 
 @ECHO ON
 java -classpath %CLASSPATH% %MAINCLASS% "%~1" "%~2"

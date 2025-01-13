@@ -1,4 +1,4 @@
-package volpintesta;
+package volpintesta.test;
 
 import java.io.*;
 import java.util.Scanner;
