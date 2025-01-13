@@ -14,11 +14,40 @@ public class TestScriptExecutor
         , FAILURE
     }
 
-    private final String mainClassName;
+    private String mainClassName;
+    public String getMainClassName() { return mainClassName; }
+
     private String[] mainFunctionArgs;
-    private long mainFunctionExecutionTimeout; // Wait time to let the output to be checked after the main is finished.
+    public String[] getMainFunctionArgs() { return mainFunctionArgs; }
+
+    private long mainFunctionExecutionTimeout;
+    public long getMainFunctionExecutionTimeout() { return mainFunctionExecutionTimeout; }
+    public boolean setMainFunctionExecutionTimeout(long milliseconds)
+    {
+        if (!hasStarted())
+        {
+            mainFunctionExecutionTimeout = milliseconds;
+            return true;
+        }
+        else
+            return false;
+    }
+
     private int maxInterruptionAttempts;
-    private final String testScriptFilePath;
+    public int getMaxInterruptionAttempts() { return maxInterruptionAttempts; }
+    public boolean setMaxInterruptionAttempts(int maxAttemptsCount)
+    {
+        if (!hasStarted())
+        {
+            maxInterruptionAttempts = maxAttemptsCount;
+            return true;
+        }
+        else
+            return false;
+    }
+
+    private String testScriptFilePath;
+    public String getTestScriptFilePath() { return testScriptFilePath; }
 
     private SyncField<ExecState> executionState;
     public boolean hasStarted() { return executionState.getValue() != ExecState.CREATED; }
@@ -58,18 +87,14 @@ public class TestScriptExecutor
     private SyncField<Throwable> mainFunctionCodeException = new SyncField<Throwable> (this, null);
     private SyncField<Throwable> mainFunctionThreadUnexpectedError = new SyncField<Throwable> (this, null);
 
-    public TestScriptExecutor (String mainClassName, String[] mainArgs, String testScriptFilePath, long mainFunctionExecutionTimeout, int maxInterruptionAttempts)
+    public TestScriptExecutor (String mainClassName, String[] mainArgs, String testScriptFilePath)
     {
         this.mainClassName = mainClassName;
         this.mainFunctionArgs = mainArgs;
         this.testScriptFilePath = testScriptFilePath;
-        this.mainFunctionExecutionTimeout = mainFunctionExecutionTimeout;
-        this.maxInterruptionAttempts = maxInterruptionAttempts;
+        this.mainFunctionExecutionTimeout = 3000;
+        this.maxInterruptionAttempts = 100;
         this.executionState = new SyncField<ExecState>(this, ExecState.CREATED);
-    }
-    public TestScriptExecutor (String mainClassName, String[] mainArgs, String testScriptFilePath)
-    {
-        this(mainClassName, mainArgs, testScriptFilePath, 3000, 100);
     }
     public TestScriptExecutor (String mainClassName, String testScriptFilePath)
     {
